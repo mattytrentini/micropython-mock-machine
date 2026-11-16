@@ -1,8 +1,11 @@
 {
   "urls": [
-    ["mock_machine.py", "github:planetinnovation/micropython-mock-machine/mock_machine.py"]
+    ["mock_machine.py", "mock_machine.py"],
+    ["mock_network.py", "mock_network.py"],
+    ["licenses/micropython-mock-machine.txt", "LICENSE"]
   ],
-  "deps": [],
-  "version": "1.0.0",
-  "description": "Mock machine module for MicroPython unit testing"
+  "deps": [["logging", "0.6.2"]],
+  "version": "1.1.0",
+  "license": "MIT",
+  "description": "Generic machine and network simulation for MicroPython Unix"
 }

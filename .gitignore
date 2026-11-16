@@ -36,3 +36,6 @@ venv.bak/
 # OS generated files #
 ######################
 .DS_Store
+
+# Native test dependencies installed by mip.
+.test-deps/

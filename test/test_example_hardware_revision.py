@@ -6,11 +6,12 @@
 import unittest
 
 from examples.hardware_revision import HardwareRevision
-from mock_machine import SPI, Pin
+from mock_machine import SPI, Pin, reset_simulation
 
 
 class TestHardwareRevision(unittest.TestCase):
     def setUp(self):
+        reset_simulation()
         self.pin_0 = Pin("D0", Pin.IN)
         self.pin_1 = Pin("D1", Pin.IN)
         self.spi = SPI()
@@ -45,4 +46,4 @@ class TestHardwareRevision(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    raise SystemExit(0 if unittest.main().wasSuccessful() else 1)

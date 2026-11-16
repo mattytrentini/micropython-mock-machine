@@ -16,18 +16,18 @@ micropython-mock-machine is designed with the following principles:
 The core mechanism is replacing the `machine` module in Python's module system:
 
 ```python
-import sys
-sys.modules["machine"] = sys.modules["mock_machine"]
+import mock_machine
+mock_machine.register_as_machine()
 ```
 
-This is wrapped in the convenient `register_as_machine()` function. Once called, any subsequent `import machine` will load the mock module instead.
+`register_as_machine()` installs its actual imported module, including qualified imports. Once called, subsequent `import machine` uses it; register before importing driver code.
 
 ### Mock Object Lifecycle
 
 Mock objects maintain state throughout their lifecycle:
 
 ```python
-# Pin objects are singleton-like per pin number
+# Pins and I2C/SPI/UART controllers have stable identity per ID.
 pin1 = machine.Pin(0)
 pin2 = machine.Pin(0)
 assert pin1 is pin2  # Same object
@@ -40,7 +40,7 @@ assert 0x50 in i2c.scan()  # Device is visible
 
 ### State Management
 
-Each mock object manages its own state:
+State survives lookups and explicit reconfiguration. Use `reset_simulation()` between independent sessions; clearing only the Pin dictionary does not reset controllers, aliases or owned timers. See the [version 1.1 contract](../../README.md#stable-state-and-isolated-sessions) for lifecycle and simulation boundaries.
 
 - **Pins**: Value, mode, pull resistor, interrupt handlers
 - **I2C**: Connected devices, register values
@@ -131,9 +131,10 @@ import mock_machine
 
 @pytest.fixture(autouse=True)
 def mock_hardware():
+    mock_machine.reset_simulation()
     mock_machine.register_as_machine()
     yield
-    mock_machine.Pin.pins.clear()
+    mock_machine.reset_simulation()
 ```
 
 ### asyncio

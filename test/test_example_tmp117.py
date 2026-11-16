@@ -11,7 +11,7 @@ import unittest
 from collections import namedtuple
 
 from examples.tmp117 import TMP117
-from mock_machine import I2C, I2CDevice
+from mock_machine import I2C, I2CDevice, reset_simulation
 
 TestCase = namedtuple("TestCase", ["temperature", "bytes"])
 
@@ -32,6 +32,7 @@ TEST_CASES = [
 
 class TestImagingModuleADC(unittest.TestCase):
     def setUp(self):
+        reset_simulation()
         # Make a mock I2C bus with mock I2C device added to it
         self.i2c = I2C()
         self.device = I2CDevice(TMP117.I2C_ADDR, self.i2c)
@@ -55,4 +56,8 @@ class TestImagingModuleADC(unittest.TestCase):
 
 
 def run():
-    unittest.main()
+    return unittest.main()
+
+
+if __name__ == "__main__":
+    raise SystemExit(0 if run().wasSuccessful() else 1)

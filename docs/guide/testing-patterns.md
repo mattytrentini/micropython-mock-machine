@@ -17,12 +17,11 @@ class TestMyDevice(unittest.TestCase):
         # Register mock_machine
         mock_machine.register_as_machine()
         # Clear any existing state
-        mock_machine.Pin.pins.clear()
+        mock_machine.reset_simulation()
 
     def tearDown(self):
         # Clean up after each test
-        mock_machine.Pin.pins.clear()
-        # Reset any global state
+        mock_machine.reset_simulation()
 ```
 
 ### Pattern 2: Pytest Fixtures
@@ -36,6 +35,7 @@ import mock_machine
 @pytest.fixture
 def mock_i2c():
     """Provides a clean I2C bus for each test."""
+    mock_machine.reset_simulation()
     mock_machine.register_as_machine()
     from mock_machine import I2C
     return I2C(0)

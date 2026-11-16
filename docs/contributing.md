@@ -152,12 +152,13 @@ Example test structure:
 class TestNewFeature(unittest.TestCase):
     def setUp(self):
         """Set up test fixtures."""
+        mock_machine.reset_simulation()
         mock_machine.register_as_machine()
         self.device = MockDevice()
 
     def tearDown(self):
         """Clean up after test."""
-        mock_machine.Pin.pins.clear()
+        mock_machine.reset_simulation()
 
     def test_normal_operation(self):
         """Test normal operation of feature."""

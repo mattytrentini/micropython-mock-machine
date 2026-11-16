@@ -7,7 +7,7 @@
 Mock machine module that can be used in unit tests to test drivers.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 import errno
 import io
@@ -21,13 +21,30 @@ except ImportError:
 
 import asyncio
 import micropython
-from micropython import const
 
 log = logging.getLogger("mock_machine")
 
 # Not concerned about unused arguments in mocks
 # pylint: disable=unused-argument
 # pylint: disable=no-member
+
+_UNSET = object()
+_cpu_hz = 0
+
+
+def freq(value=None):
+    """Read/set virtual CPU Hz; this never changes the host CPU."""
+    global _cpu_hz
+    if value is None:
+        return _cpu_hz
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("frequency must be a positive integer")
+    _cpu_hz = value
+
+
+def _check_active(resource):
+    if not resource._active:
+        raise OSError(errno.ENODEV)
 
 
 def register_as_machine():
@@ -38,7 +55,7 @@ def register_as_machine():
     import sys
 
     log.warning("All imports of machine are mocked from here on")
-    sys.modules["machine"] = sys.modules["mock_machine"]
+    sys.modules["machine"] = sys.modules[__name__]
 
 
 # machine module interfaces
@@ -111,33 +128,51 @@ class I2C:
     https://docs.micropython.org/en/latest/library/machine.I2C.html
     """
 
-    def __init__(self, *args, id=None, scl=None, sda=None, freq=400000):  # pylint: disable=unused-argument,redefined-builtin
-        """
-        Construct a new I2C object.
+    _controllers = {}
 
-        Initialise mock I2C with register values.
-        """
-        self.devices = {}
+    def __new__(cls, id=None, **kwargs):
+        if id in cls._controllers:
+            return cls._controllers[id]
+        self = super().__new__(cls)
+        cls._controllers[id] = self
+        return self
+
+    def __init__(self, id=None, *, scl=_UNSET, sda=_UNSET, freq=_UNSET):
+        if not hasattr(self, "devices"):
+            self.id = id
+            self.devices = {}
+            self.scl = self.sda = None
+            self.freq = 400000
+            self._active = True
+        if scl is not _UNSET or sda is not _UNSET or freq is not _UNSET:
+            self.init(scl, sda, freq=freq)
 
     # Device management methods
     def add_device(self, device):
         """
         Add I2CDevice at address I2CDevice.address.
         """
+        _check_active(self)
         if device.addr in self.devices:
             raise ValueError("Device with given address already on bus.")
         self.devices[device.addr] = device
 
     # General methods
-    def init(self, scl, sda, *args, freq=400000):
-        """
-        Initialise the I2C bus.
-        """
+    def init(self, scl=_UNSET, sda=_UNSET, *, freq=_UNSET):
+        """Re-enable/reconfigure without detaching devices."""
+        if freq is not _UNSET:
+            if not isinstance(freq, int) or freq <= 0:
+                raise ValueError("frequency must be positive")
+            self.freq = freq
+        if scl is not _UNSET:
+            self.scl = scl
+        if sda is not _UNSET:
+            self.sda = sda
+        self._active = True
 
     def deinit(self):
-        """
-        Turn off the I2C bus.
-        """
+        """Disable transfers; init() explicitly re-enables the bus."""
+        self._active = False
 
     def scan(self):
         """
@@ -148,6 +183,7 @@ class I2C:
 
         Returns a list of addresses that responded to the scan.
         """
+        _check_active(self)
         scan_list = []
         for addr in self.devices:
             if 0x08 <= addr <= 0x77:
@@ -163,6 +199,7 @@ class I2C:
 
         Returns a bytes object with the data read.
         """
+        _check_active(self)
         if addr not in self.devices:
             raise OSError(errno.ENODEV)
         return self.devices[addr].readfrom(nbytes, stop)
@@ -176,6 +213,7 @@ class I2C:
 
         The method returns None.
         """
+        _check_active(self)
         if addr not in self.devices:
             raise OSError(errno.ENODEV)
         return self.devices[addr].readfrom_into(buf, stop)
@@ -190,6 +228,7 @@ class I2C:
 
         The function returns the number of ACKs that were received.
         """
+        _check_active(self)
         if addr not in self.devices:
             raise OSError(errno.ENODEV)
         return self.devices[addr].writeto(buf, stop)
@@ -204,6 +243,7 @@ class I2C:
 
         Returns a bytes object with the data read.
         """
+        _check_active(self)
         if addr not in self.devices:
             raise OSError(errno.ENODEV)
         return self.devices[addr].readfrom_mem(memaddr, nbytes)
@@ -217,6 +257,7 @@ class I2C:
 
         The method returns None.
         """
+        _check_active(self)
         if addr not in self.devices:
             raise OSError(errno.ENODEV)
         return self.devices[addr].readfrom_mem_into(memaddr, buf)
@@ -230,6 +271,7 @@ class I2C:
 
         The method returns None.
         """
+        _check_active(self)
         if addr not in self.devices:
             raise OSError(errno.ENODEV)
         self.devices[addr].writeto_mem(memaddr, buf)
@@ -442,10 +484,28 @@ class Pin:
     PULL_UP = 0
     PULL_DOWN = 1
 
-    IRQ_RISING = 269549568
-    IRQ_FALLING = 270598144
+    IRQ_RISING = 1
+    IRQ_FALLING = 2
 
     pins: Dict[str, "Pin"] = {}
+    _aliases = {}
+
+    @classmethod
+    def configure_aliases(cls, mapping):
+        """Install one-level board aliases before constructing pins."""
+        aliases = dict(mapping)
+        for alias, canonical in aliases.items():
+            if not isinstance(alias, str) or not alias:
+                raise ValueError("aliases must be nonempty strings")
+            if isinstance(canonical, bool) or not isinstance(canonical, (int, str)):
+                raise ValueError("canonical pin IDs must be integers or strings")
+            if canonical in aliases:
+                raise ValueError("alias chains and cycles are ambiguous")
+        if aliases == cls._aliases:
+            return
+        if cls.pins:
+            raise ValueError("configure aliases before creating pins")
+        cls._aliases = aliases
 
     """
     Configuring Pin.board and Pin.cpu definitions.
@@ -532,6 +592,8 @@ class Pin:
             if name.startswith("_"):
                 # Don't intercept private attributes
                 raise AttributeError(f"Pin.{self._namespace_name} has no attribute '{name}'")
+            if self._namespace_name == "board" and name in Pin._aliases:
+                return Pin._aliases[name]
             if name in self._pins:
                 return self._pins[name]
             if self._magic_mode:
@@ -568,44 +630,75 @@ class Pin:
     cpu = _PinCPU()
 
     # pylint: disable=redefined-builtin
-    def __new__(cls, id, mode=0, pull=0, value=None, drive=0, alt=-1):
-        """
-        If the matching pin is already created, keep that. It's config
-        will be updated in __init__() below
-        """
-        if id in Pin.pins:
-            return Pin.pins[id]
+    def __new__(cls, id, mode=_UNSET, pull=_UNSET, value=_UNSET, drive=_UNSET, alt=_UNSET):
+        if isinstance(id, Pin):
+            return id
+        id = cls._aliases.get(id, id)
+        if isinstance(id, bool) or not isinstance(id, (int, str)):
+            raise ValueError("pin ID must be an integer or string")
+        if id in cls.pins:
+            return cls.pins[id]
         self = super().__new__(cls)
-        Pin.pins[id] = self
+        self.id = id
+        cls.pins[id] = self
         return self
 
     # pylint: disable=redefined-builtin
-    def __init__(self, id, mode=0, pull=0, value=None, drive=0, alt=-1):
-        self._value = value
-        self._mode = mode
-        self._pull = pull
-        self._alt = None
-        self._irq_handler = None
-        self._irq_trigger = None
+    def __init__(self, id, mode=_UNSET, pull=_UNSET, value=_UNSET, drive=_UNSET, alt=_UNSET):
+        if not hasattr(self, "_active"):
+            self._active = True
+            self._value = None
+            self._mode = self.IN
+            self._pull = None
+            self._alt = None
+            self._drive = None
+            self._irq_handler = None
+            self._irq_trigger = 0
+            self._irq_generation = 0
+        self.init(mode=mode, pull=pull, alt=alt, value=value, drive=drive)
 
-    def init(self, mode=0, pull=0, alt=0, value=None):
-        self._mode = mode
-        self._pull = pull
-        self._alt = alt
-        self._value = value
+    def init(self, mode=_UNSET, pull=_UNSET, alt=_UNSET, value=_UNSET, drive=_UNSET):
+        _check_active(self)
+        if mode is not _UNSET:
+            self._mode = mode
+        if pull is not _UNSET:
+            self._pull = pull
+        if alt is not _UNSET:
+            self._alt = alt
+        if drive is not _UNSET:
+            self._drive = drive
+        if value is not _UNSET:
+            self.inject(value)
 
     def value(self, new_value=None):
-        if new_value is not None:
-            old_value = self._value
-            self._value = int(new_value)
+        _check_active(self)
+        if new_value is None:
+            return self._value
+        self.inject(new_value)
 
-            if self._irq_trigger and self._irq_handler:
-                if self._irq_trigger & self.IRQ_RISING and self._value > old_value:
-                    micropython.schedule(self._irq_handler, self)
-                if self._irq_trigger & self.IRQ_FALLING and self._value < old_value:
-                    micropython.schedule(self._irq_handler, self)
-            return None
-        return self._value
+    def inject(self, value):
+        """Set the sampled level; None means unknown/released, not an edge."""
+        _check_active(self)
+        if value is not None and value not in (0, 1):
+            raise ValueError("pin level must be 0, 1 or None")
+        old = self._value
+        self._value = None if value is None else int(value)
+        edge = 0
+        if old == 0 and self._value == 1:
+            edge = self.IRQ_RISING
+        elif old == 1 and self._value == 0:
+            edge = self.IRQ_FALLING
+        if edge & self._irq_trigger and self._irq_handler:
+            micropython.schedule(self._dispatch_irq, (self._irq_handler, self._irq_generation))
+
+    def _dispatch_irq(self, event):
+        handler, generation = event
+        if self._active and generation == self._irq_generation:
+            handler(self)
+
+    def snapshot(self):
+        _check_active(self)
+        return {"id": self.id, "mode": self._mode, "pull": self._pull, "value": self._value}
 
     def on(self):
         self.value(1)
@@ -622,11 +715,16 @@ class Pin:
     def irq(
         self, handler=None, trigger=IRQ_FALLING | IRQ_RISING, priority=1, wake=None, hard=False
     ):
+        _check_active(self)
+        if hard:
+            raise NotImplementedError("hard IRQs are not simulated")
+        self._irq_generation += 1
         self._irq_handler = handler
         self._irq_trigger = trigger
         return self  # non-standard return value
 
     def mode(self):
+        _check_active(self)
         return self._mode
 
     def __call__(self, x=None):
@@ -686,12 +784,15 @@ class RTC:
     https://docs.micropython.org/en/latest/library/machine.RTC.html
     """
 
+    _instances = []
+
     def __init__(self):
         self._callback = None
         self._timeout = None
         self._stop = False
         self._running = False
         self._task = None  # don't start task yet
+        self._instances.append(self)
 
     def wakeup(self, timeout=None, callback=None):
         """
@@ -702,6 +803,7 @@ class RTC:
         """
         log.info("RTC: Registering a wakeup in: %s, callback is: %s", timeout, callback)
 
+        self._stop = False
         self._timeout = timeout
         self._callback = callback
         if callback:
@@ -732,9 +834,9 @@ class RTC:
         log.info("RTC: Calling Stop")
         self._stop = True
         if self._task:
-            while self._running:
-                pass
+            self._task.cancel()
             self._task = None
+        self._running = False
 
     @staticmethod
     def info():
@@ -772,110 +874,111 @@ class Signal:
 
 
 class SPI:
-    """
-    Unittest support class for machine.SPI
+    """Shared virtual SPI controller; receive bytes must be supplied explicitly."""
 
-    https://docs.micropython.org/en/latest/library/machine.SPI.html
-    """
+    MSB = 0
+    LSB = 1
+    _controllers = {}
+    capture_limit = 256
+    history_limit = 16
 
-    def __init__(self, id=None):  # pylint: disable=unused-argument,redefined-builtin
-        """
-        Construct an SPI object on the given bus, id.
-        """
-        # Use write_buf/read_buf if dealing with the same data regardless of the
-        # number of calls.
-        self.write_buf = bytearray()  # what has been written last
-        self.read_buf = bytearray()  # what to return from read
+    def __new__(cls, id=None, *args, **kwargs):
+        if id in cls._controllers:
+            return cls._controllers[id]
+        self = super().__new__(cls)
+        cls._controllers[id] = self
+        return self
 
-        # Use writes/reads if dealing with different data in different calls.
-        self.writes = []  # what has been written in order of calls
-        self.reads = []  # what to return from read in order of calls
-        self.num_reads = 0  # the number of reads so far
-
-    # SPI Methods
-    def init(
-        self,
-        baudrate=1000000,
-        *,
-        polarity=0,
-        phase=0,
-        bits=8,
-        firstbit=None,
-        sck=None,
-        mosi=None,
-        miso=None,
-        pins=None,
+    def __init__(
+        self, id=None, baudrate=_UNSET, *, polarity=_UNSET, phase=_UNSET,
+        bits=_UNSET, firstbit=_UNSET, sck=_UNSET, mosi=_UNSET, miso=_UNSET, pins=_UNSET,
     ):
-        """
-        Initialise the SPI bus with the given parameters
-        """
+        if not hasattr(self, "_active"):
+            self.id = id
+            self._active = True
+            self.baudrate = 1000000
+            self.polarity = self.phase = 0
+            self.bits = 8
+            self.firstbit = self.MSB
+            self.sck = self.mosi = self.miso = self.pins = None
+            self.reset()
+        settings = (baudrate, polarity, phase, bits, firstbit, sck, mosi, miso, pins)
+        if any(value is not _UNSET for value in settings):
+            self.init(baudrate, polarity=polarity, phase=phase, bits=bits,
+                      firstbit=firstbit, sck=sck, mosi=mosi, miso=miso, pins=pins)
+
+    def init(
+        self, baudrate=_UNSET, *, polarity=_UNSET, phase=_UNSET, bits=_UNSET,
+        firstbit=_UNSET, sck=_UNSET, mosi=_UNSET, miso=_UNSET, pins=_UNSET,
+    ):
+        """Re-enable/reconfigure without clearing supplied RX or captured TX."""
+        if baudrate is not _UNSET and (not isinstance(baudrate, int) or baudrate <= 0):
+            raise ValueError("baudrate must be positive")
+        if bits is not _UNSET and bits != 8:
+            raise NotImplementedError("only byte-wide SPI is simulated")
+        for name, value in (
+            ("baudrate", baudrate), ("polarity", polarity), ("phase", phase),
+            ("bits", bits), ("firstbit", firstbit), ("sck", sck), ("mosi", mosi),
+            ("miso", miso), ("pins", pins),
+        ):
+            if value is not _UNSET:
+                setattr(self, name, value)
+        self._active = True
 
     def deinit(self):
-        """
-        Turn off the SPI bus
-        """
+        self._active = False
 
-    def read(self, nbytes, write=0x00):  # pylint: disable=unused-argument
-        """
-        Read a number of bytes specified by nbytes.
-
-        Continuously writes the single byte given by write, to ensure read data is clocked.
-
-        Returns a bytes object with the data that was read.
-        """
-        # Return the data from read_buf again and again, if specified.
+    def read(self, nbytes, write=0x00):
+        _check_active(self)
+        if nbytes < 0:
+            raise ValueError("negative read size")
+        if not 0 <= write <= 255:
+            raise ValueError("write must be a byte")
+        if nbytes == 0:
+            return b""
         if self.read_buf:
-            return self.read_buf[:nbytes]
-
-        # Otherwise, return the data from reads in order of calls, if specified.
-        if self.reads:
-            index = self.num_reads
-            self.num_reads += 1
-            return self.reads[index]
-
-        raise NotImplementedError
+            source = self.read_buf
+        elif self.reads:
+            source = self.reads[0]
+        else:
+            raise OSError(errno.ENODEV)
+        if len(source) < nbytes:
+            raise OSError(errno.EIO)
+        result = bytes(memoryview(source)[:nbytes])
+        if not self.read_buf:
+            self.reads.pop(0)
+        self.num_reads += 1
+        return result
 
     def readinto(self, buf, write=0x00):
-        """
-        Read into the buffer specified by buf.
-
-        Number of bytes read is the length of the buffer.
-        Continuously writing the single byte given by write, to ensure read data is clocked.
-
-        Returns None.
-        """
-        buf[:] = self.read(len(buf))
+        buf[:] = self.read(len(buf), write)
 
     def write(self, buf):
-        """
-        Write the bytes contained in buf.
-
-        Returns None.
-        """
-        # Always record copy of the last written data to write_buf.
-        self.write_buf = bytes(buf)
-
-        # Always append copy of the written data to writes in order of calls.
-        self.writes.append(bytes(buf))
+        _check_active(self)
+        self.write_buf = bytes(memoryview(buf)[-self.capture_limit:])
+        if len(self.writes) >= self.history_limit:
+            self.writes.pop(0)
+        self.writes.append(self.write_buf)
+        self.num_writes += 1
 
     def write_readinto(self, write_buf, read_buf):
-        """
-        Write the bytes from write_buf while reading into read_buf.
-
-        The buffers can be the same or different, but both buffers must have the same length.
-
-        Returns None.
-        """
+        _check_active(self)
+        if len(write_buf) != len(read_buf):
+            raise ValueError("SPI buffers must have equal lengths")
+        self.write(write_buf)
         self.readinto(read_buf)
-        self.write_buf = write_buf
 
     def reset(self):
-        """
-        Reset to the initial state of the mock.
-        """
+        """Clear supplied receive data, bounded observations and counters."""
+        _check_active(self)
+        self.write_buf = b""
+        self.read_buf = b""
         self.writes = []
         self.reads = []
         self.num_reads = 0
+        self.num_writes = 0
+
+
 
 
 class Timer:
@@ -886,6 +989,8 @@ class Timer:
     ONE_SHOT = 0
     PERIODIC = 1
 
+    _instances = []
+
     def __init__(self, id=0, channel=None, mode=None, period=None, callback=None):
         self._id = id  # Micropython timer first positional param is id.
         self._start = None
@@ -895,6 +1000,7 @@ class Timer:
         self._task = None
         self._channel = channel
         self._freq = 1000  # default frequency
+        self._instances.append(self)
 
         if mode or period or callback:
             self.init(freq=self._freq, mode=mode, period=period, callback=callback)
@@ -928,16 +1034,20 @@ class WDT:
     https://docs.micropython.org/en/latest/library/machine.WDT.html
     """
 
+    _instances = []
+
     def __init__(self, timeout):
         self._timeout = timeout
         self._last_pat = time.ticks_ms()
         self._disabled = False
         self.running = True
         self._task = asyncio.create_task(self._tick())
+        self._instances.append(self)
 
     def disable(self):
         self._disabled = True
         self.running = False
+        self._task.cancel()
 
     def feed(self):
         assert self._disabled or self.running, "you are late, WDT already stopped"
@@ -956,90 +1066,333 @@ class WDT:
                 raise RuntimeError()
 
 
-class UART(io.IOBase):
-    """
-    Mock UART
-    https://docs.micropython.org/en/latest/library/machine.UART.html
-    """
+class _UARTPoll:
+    """Bridge virtual readiness to the Unix port's file-descriptor poller."""
 
-    def __init__(
-        self,
-        id=None,
-        baudrate=9600,
-        bits=8,
-        parity=None,
-        stop=1,
-        tx=None,
-        rx=None,
-        txbuf=256,
-        rxbuf=256,
-        timeout=0,
-        timeout_char=0,
-        invert=0,
-        flow=0,
-        read_buf_len=256,
-        data_for_read=b"",
-    ):
-        rx_size = rxbuf if rxbuf != 256 else read_buf_len
-        tx_size = txbuf
+    def __init__(self):
+        import os
+        import socket
+        import struct
 
-        # Create RingIO buffers for RX and TX
-        self._rx_ring = micropython.RingIO(rx_size)
-        self._tx_ring = micropython.RingIO(tx_size)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        path = "/tmp/mock-uart-" + os.urandom(8).hex()
+        # MicroPython's Unix socket API accepts native sockaddr bytes.
+        address = struct.pack("H", socket.AF_UNIX) + path.encode() + b"\0"
+        bound = False
+        self.stream = self.peer = None
+        try:
+            listener.bind(address)
+            bound = True
+            listener.listen(1)
+            self.peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.peer.connect(address)
+            self.stream, _ = listener.accept()
+            self.stream.setblocking(False)
+            self.peer.setblocking(False)
+        except Exception:
+            self.close()
+            raise
+        finally:
+            listener.close()
+            if bound:
+                os.remove(path)
+        self.notified = False
+        self.blocked = False
+        self.filler = b"\0" * 4096
 
-        if data_for_read:
-            self.inject_data(data_for_read)
-
-        super().__init__()
-
-    def inject_data(self, data):
-        """Inject data into read buffer to simulate receiving data."""
-        return self._rx_ring.write(data)
-
-    def write(self, data):
-        return self._tx_ring.write(data)
-
-    def read(self, nbytes=-1):
-        if nbytes == -1:
-            return self._rx_ring.read()
-        return self._rx_ring.read(nbytes)
-
-    def readinto(self, buf, nbytes=None):
-        if nbytes is None:
-            nbytes = len(buf)
-        return self._rx_ring.readinto(buf, nbytes)
-
-    def readline(self):
-        return self._rx_ring.readline()
-
-    def flush(self):
-        pass
+    def sync(self, readable, writable):
+        if readable and not self.notified:
+            if self.peer.send(b"\1") != 1:
+                raise OSError(errno.EIO)
+            self.notified = True
+        elif not readable and self.notified:
+            self.stream.recv(1)
+            self.notified = False
+        if not writable and not self.blocked:
+            while True:
+                try:
+                    if not self.stream.send(self.filler):
+                        raise OSError(errno.EIO)
+                except OSError as error:
+                    if error.args[0] != errno.EAGAIN:
+                        raise
+                    break
+            self.blocked = True
+        elif writable and self.blocked:
+            while True:
+                try:
+                    if not self.peer.recv(4096):
+                        raise OSError(errno.EIO)
+                except OSError as error:
+                    if error.args[0] != errno.EAGAIN:
+                        raise
+                    break
+            self.blocked = False
 
     def close(self):
-        pass
+        for stream in (self.stream, self.peer):
+            if stream is not None:
+                stream.close()
+        self.stream = self.peer = None
+
+
+class UART(io.IOBase):
+    """Nonblocking virtual UART backed by native RingIO buffers."""
+
+    INV_TX = 0x01
+    INV_RX = 0x02
+    RTS = 0x01
+    CTS = 0x02
+    _controllers = {}
+
+    def __new__(cls, id=None, *args, **kwargs):
+        if id in cls._controllers:
+            return cls._controllers[id]
+        self = super().__new__(cls)
+        cls._controllers[id] = self
+        return self
+
+    def __init__(
+        self, id=None, baudrate=_UNSET, bits=_UNSET, parity=_UNSET, stop=_UNSET,
+        tx=_UNSET, rx=_UNSET, txbuf=_UNSET, rxbuf=_UNSET, timeout=_UNSET,
+        timeout_char=_UNSET, invert=_UNSET, flow=_UNSET, read_buf_len=_UNSET,
+        data_for_read=_UNSET, *, rts=_UNSET, cts=_UNSET,
+    ):
+        if not hasattr(self, "_active"):
+            super().__init__()
+            self.id = id
+            self._active = True
+            self.baudrate = 9600
+            self.bits = 8
+            self.parity = self.tx = self.rx = self.rts = self.cts = None
+            self.stop = 1
+            self.timeout = self.timeout_char = self.invert = self.flow = 0
+            self.txbuf = self.rxbuf = 256
+            self._rx_ring = micropython.RingIO(self.rxbuf)
+            self._tx_ring = micropython.RingIO(self.txbuf)
+            self._responder = None
+            self._tx_pending = 0
+            self.num_writes = 0
+            self._poll = None
+        settings = (
+            baudrate, bits, parity, stop, tx, rx, txbuf, rxbuf, timeout,
+            timeout_char, invert, flow, read_buf_len, rts, cts,
+        )
+        if any(value is not _UNSET for value in settings):
+            self.init(baudrate, bits, parity, stop, tx=tx, rx=rx, txbuf=txbuf,
+                      rxbuf=rxbuf, timeout=timeout, timeout_char=timeout_char,
+                      invert=invert, flow=flow, read_buf_len=read_buf_len, rts=rts, cts=cts)
+        if data_for_read is not _UNSET:
+            self.inject_data(data_for_read)
+
+    def init(
+        self, baudrate=_UNSET, bits=_UNSET, parity=_UNSET, stop=_UNSET, *,
+        tx=_UNSET, rx=_UNSET, txbuf=_UNSET, rxbuf=_UNSET, timeout=_UNSET,
+        timeout_char=_UNSET, invert=_UNSET, flow=_UNSET, read_buf_len=_UNSET,
+        rts=_UNSET, cts=_UNSET,
+    ):
+        """Re-enable/reconfigure; nonempty buffers cannot be resized."""
+        if rxbuf is _UNSET:
+            rxbuf = read_buf_len
+        for size in (rxbuf, txbuf):
+            if size is not _UNSET and (not isinstance(size, int) or size <= 0):
+                raise ValueError("buffer sizes must be positive integers")
+        if baudrate is not _UNSET and (not isinstance(baudrate, int) or baudrate <= 0):
+            raise ValueError("baudrate must be positive")
+        if bits is not _UNSET and bits not in (7, 8, 9):
+            raise ValueError("unsupported UART bits")
+        if parity is not _UNSET and parity not in (None, 0, 1):
+            raise ValueError("parity must be None, 0 or 1")
+        if stop is not _UNSET and stop not in (1, 2):
+            raise ValueError("stop must be 1 or 2")
+        if rxbuf is not _UNSET and rxbuf != self.rxbuf and self._rx_ring.any():
+            raise OSError(errno.EAGAIN)
+        if txbuf is not _UNSET and txbuf != self.txbuf and self._tx_ring.any():
+            raise OSError(errno.EAGAIN)
+        if rxbuf is not _UNSET and rxbuf != self.rxbuf:
+            self._rx_ring = micropython.RingIO(rxbuf)
+            self.rxbuf = rxbuf
+        if txbuf is not _UNSET and txbuf != self.txbuf:
+            self._tx_ring = micropython.RingIO(txbuf)
+            self.txbuf = txbuf
+        for name, value in (
+            ("baudrate", baudrate), ("bits", bits), ("parity", parity), ("stop", stop),
+            ("tx", tx), ("rx", rx), ("timeout", timeout), ("timeout_char", timeout_char),
+            ("invert", invert), ("flow", flow), ("rts", rts), ("cts", cts),
+        ):
+            if value is not _UNSET:
+                setattr(self, name, value)
+        self._active = True
+        self._sync_poll()
+
+    def _sync_poll(self):
+        if self._poll is not None:
+            self._poll.sync(
+                bool(self._rx_ring.any()),
+                self._responder is not None or self._tx_ring.any() < self.txbuf,
+            )
+
+    def set_responder(self, callback):
+        """Attach a consuming peer: accepted immutable TX bytes -> RX bytes/None."""
+        _check_active(self)
+        if callback is not None and not callable(callback):
+            raise TypeError("responder must be callable or None")
+        self._responder = callback
+        self._tx_ring.read()
+        self._tx_pending = 0
+        self._sync_poll()
+
+    def inject_data(self, data):
+        """Atomically enqueue RX; overflow raises ENOBUFS without losing bytes."""
+        _check_active(self)
+        if len(data) > self.rxbuf - self._rx_ring.any():
+            raise OSError(errno.ENOBUFS)
+        accepted = self._rx_ring.write(data)
+        self._sync_poll()
+        return accepted
+
+    def write(self, data):
+        _check_active(self)
+        if isinstance(data, str):
+            data = data.encode()
+        if not data:
+            return 0
+        if self._responder is None:
+            accepted = self._tx_ring.write(data)
+            if not accepted:
+                return None
+            self._tx_pending += accepted
+        else:
+            accepted = len(data)
+            immutable = bytes(data)
+            self._tx_ring.read()
+            self._tx_ring.write(memoryview(immutable)[-self.txbuf:])
+            self._tx_pending = accepted
+            try:
+                response = self._responder(immutable)
+                if response is not None:
+                    self.inject_data(response)
+            finally:
+                self._tx_pending = 0
+        self.num_writes += 1
+        self._sync_poll()
+        return accepted
+
+    def read(self, nbytes=-1):
+        _check_active(self)
+        if nbytes is None or nbytes == -1:
+            data = self._rx_ring.read() if self._rx_ring.any() else None
+        else:
+            if nbytes < 0:
+                raise ValueError("negative read size")
+            if nbytes == 0:
+                return b""
+            data = self._rx_ring.read(nbytes) if self._rx_ring.any() else None
+        self._sync_poll()
+        return data
+
+    def readinto(self, buf, nbytes=None):
+        _check_active(self)
+        if nbytes is None:
+            nbytes = len(buf)
+        if nbytes < 0 or nbytes > len(buf):
+            raise ValueError("invalid read size")
+        if nbytes == 0:
+            return 0
+        if not self._rx_ring.any():
+            return None
+        count = self._rx_ring.readinto(buf, nbytes)
+        self._sync_poll()
+        return count
+
+    def readline(self):
+        _check_active(self)
+        data = self._rx_ring.readline() if self._rx_ring.any() else None
+        self._sync_poll()
+        return data
+
+    def flush(self):
+        """Complete virtual TX, retaining the bounded observation capture."""
+        _check_active(self)
+        self._tx_pending = 0
+
+    def txdone(self):
+        _check_active(self)
+        return self._tx_pending == 0
+
+    def deinit(self):
+        """Close the stream and discard pending data and its peer."""
+        self._active = False
+        self._rx_ring.read()
+        self._tx_ring.read()
+        self._responder = None
+        self._tx_pending = 0
+        if self._poll is not None:
+            self._poll.close()
+            self._poll = None
+
+    def close(self):
+        self.deinit()
 
     def any(self):
+        _check_active(self)
         return self._rx_ring.any()
 
     def ioctl(self, op, arg):
-        # From micropython/py/stream.h
-        # This allows the class to be used in asyncio.StreamReader etc.
-        _MP_STREAM_POLL = const(3)
-        _MP_STREAM_POLL_RD = const(0x0001)
-        _MP_STREAM_FLUSH = const(1)
-        _MP_STREAM_CLOSE = const(4)
-
-        if op == _MP_STREAM_POLL:
-            ret = _MP_STREAM_POLL_RD if self.any() else 0
-            return ret
-        elif op == _MP_STREAM_FLUSH:
-            return self.flush()
-        elif op == _MP_STREAM_CLOSE:
-            return self.close()
-
-        # Return -1 for unsupported ioctl operations
-        return -1
+        if op == 10:  # MP_STREAM_GET_FILENO, required by Unix select.poll
+            _check_active(self)
+            if self._poll is None:
+                self._poll = _UARTPoll()
+            self._sync_poll()
+            return self._poll.stream.fileno()
+        if op == 3:  # MP_STREAM_POLL
+            if not self._active:
+                return 0x0020  # POLLNVAL
+            ready = 0x0001 if self._rx_ring.any() else 0
+            if self._responder is not None or self._tx_ring.any() < self.txbuf:
+                ready |= 0x0004  # POLLOUT
+            return ready & arg
+        if op == 1:  # MP_STREAM_FLUSH
+            self.flush()
+            return 0
+        if op == 4:  # MP_STREAM_CLOSE
+            self.close()
+            return 0
+        raise OSError(errno.EINVAL)
 
     def get_written_data(self):
-        """Get all data written to UART (for test assertions)."""
-        return self._tx_ring.read()
+        """Drain TX capture (latest bounded suffix when a responder is attached)."""
+        _check_active(self)
+        data = self._tx_ring.read()
+        if data is not None:
+            self._tx_pending = max(0, self._tx_pending - len(data))
+        self._sync_poll()
+        return data
+
+
+def reset_simulation():
+    """Isolate sessions; no host reset or native-module replacement occurs."""
+    global _cpu_hz, __reset_cause__
+    for pin in Pin.pins.values():
+        pin._active = False
+        pin._irq_handler = None
+        pin._irq_generation += 1
+    Pin.pins.clear()
+    Pin._aliases = {}
+    Pin.board.configure(None)
+    for cls in (I2C, SPI, UART):
+        for controller in cls._controllers.values():
+            controller.deinit()
+        cls._controllers.clear()
+    ADC.pin_adc_map.clear()
+    for timer in Timer._instances:
+        timer.deinit()
+    Timer._instances.clear()
+    for rtc in RTC._instances:
+        rtc.stop()
+    RTC._instances.clear()
+    for watchdog in WDT._instances:
+        watchdog.disable()
+    WDT._instances.clear()
+    _cpu_hz = 0
+    __reset_cause__ = PWRON_RESET

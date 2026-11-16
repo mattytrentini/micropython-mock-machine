@@ -261,7 +261,7 @@ def test_memory_usage():
 
     # Clean up
     pins.clear()
-    mock_machine.Pin.pins.clear()
+    mock_machine.reset_simulation()
     gc.collect()
 
     # Verify memory recovered

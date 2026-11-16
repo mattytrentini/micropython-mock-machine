@@ -6,7 +6,7 @@
 import time
 import unittest
 
-from mock_machine import I2C, I2CDevice, Pin, UART
+from mock_machine import I2C, I2CDevice, Pin, UART, reset_simulation
 
 
 class TestI2C(unittest.TestCase):
@@ -23,6 +23,7 @@ class TestI2C(unittest.TestCase):
     MEMADDR_TEST_CASES = (0x00, 0x05, 0x0A, 0x0F, 0x55, 0xAA, 0xFF)
 
     def setUp(self):
+        reset_simulation()
         # Make a mock I2C bus with mock I2C devices added to it
         self.i2c = I2C()
         self.devices = {}
@@ -184,6 +185,9 @@ class TestI2C(unittest.TestCase):
 
 
 class TestPin(unittest.TestCase):
+    def setUp(self):
+        reset_simulation()
+
     @staticmethod
     def test_pin_irq():
         fired = False
@@ -353,6 +357,9 @@ class TestPin(unittest.TestCase):
 class TestUART(unittest.TestCase):
     """Test UART class with RingIO buffers."""
 
+    def setUp(self):
+        reset_simulation()
+
     def test_basic_read_write(self):
         """Test basic read and write operations."""
         uart = UART()
@@ -461,13 +468,11 @@ class TestUART(unittest.TestCase):
         # Create small buffer
         uart = UART(rxbuf=8)
 
-        # Fill buffer (8 bytes max, RingIO reserves 1)
-        written = uart.inject_data(b"12345678")
-        self.assertTrue(written <= 8)
-
-        # Try to inject more - should write less than requested
-        overflow = uart.inject_data(b"90")
-        self.assertTrue(overflow < 2)
+        # Overflow is atomic and explicit; the original queued data survives.
+        self.assertEqual(uart.inject_data(b"12345678"), 8)
+        with self.assertRaises(OSError):
+            uart.inject_data(b"90")
+        self.assertEqual(uart.read(), b"12345678")
 
     def test_write_buffer_capture(self):
         """Test that written data is captured correctly."""
@@ -486,12 +491,12 @@ class TestUART(unittest.TestCase):
         uart = UART()
 
         # No data - should return 0
-        result = uart.ioctl(3, 0)  # MP_STREAM_POLL
+        result = uart.ioctl(3, 0x0001)  # request read readiness
         self.assertEqual(result, 0)
 
         # With data - should return MP_STREAM_POLL_RD
         uart.inject_data(b"data")
-        result = uart.ioctl(3, 0)
+        result = uart.ioctl(3, 0x0001)
         self.assertEqual(result, 0x0001)  # MP_STREAM_POLL_RD
 
     def test_custom_buffer_sizes(self):
@@ -516,17 +521,17 @@ class TestUART(unittest.TestCase):
 
         # Reading from empty buffer
         data = uart.read()
-        self.assertEqual(data, b"")
+        self.assertIsNone(data)
 
         data = uart.read(10)
-        self.assertEqual(data, b"")
+        self.assertIsNone(data)
 
         line = uart.readline()
-        self.assertEqual(line, b"")
+        self.assertIsNone(line)
 
         buf = bytearray(4)
         n = uart.readinto(buf)
-        self.assertEqual(n, 0)
+        self.assertIsNone(n)
 
     def test_constructor_params(self):
         """Test UART accepts standard constructor parameters."""
@@ -554,4 +559,4 @@ class TestUART(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    raise SystemExit(0 if unittest.main().wasSuccessful() else 1)

@@ -150,10 +150,11 @@ import mock_machine
 @pytest.fixture(autouse=True)
 def mock_hardware():
     """Automatically mock hardware for all tests."""
+    mock_machine.reset_simulation()
     mock_machine.register_as_machine()
     yield
     # Clean up
-    mock_machine.Pin.pins.clear()
+    mock_machine.reset_simulation()
 
 @pytest.fixture
 def mock_i2c():
