@@ -1,6 +1,6 @@
 # micropython-mock-machine
 
-A MicroPython library providing generic `machine` and modeled `network` state for driver tests and Unix simulation. Version 1.1.0, MIT licensed.
+A MicroPython library providing generic `machine` and modeled `network` state for driver tests and Unix simulation. Version 1.1.1, MIT licensed.
 
 This is a simulation foundation, not an ESP32 emulator or an N30/CO16 application bring-up. It supplies no board-specific chip, display-controller, meter or protocol models. Native MicroPython `asyncio`, `micropython.RingIO`, `framebuf`, time, GC and host networking remain native. Simulated results do not validate electrical behavior, timing, calibration or physical hardware.
 
@@ -55,7 +55,7 @@ Additional utilities:
 
 ```python
 import mip
-mip.install("github:mattytrentini/micropython-mock-machine@v1.1.0")
+mip.install("github:mattytrentini/micropython-mock-machine", version="v1.1.1")
 ```
 
 ### Manual installation

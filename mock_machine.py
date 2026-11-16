@@ -7,7 +7,7 @@
 Mock machine module that can be used in unit tests to test drivers.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 import errno
 import io
@@ -427,6 +427,12 @@ class RegisterBasedI2CDevice(I2CDevice):
                     self.registers[reg_addr] = value
 
         return len(buf)
+
+    def readfrom(self, nbytes, stop=True):
+        """Read through the same register protocol as readfrom_into."""
+        buf = bytearray(nbytes)
+        self.readfrom_into(buf, stop)
+        return bytes(buf)
 
     def readfrom_into(self, buf, stop=True):
         """

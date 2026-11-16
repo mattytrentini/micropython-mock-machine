@@ -134,6 +134,17 @@ class MachineContract(unittest.TestCase):
         machine.reset_simulation()
         self.assertEqual(machine.I2C(0).scan(), [])
 
+    def test_register_device_read_forms_share_protocol_state(self):
+        bus = machine.I2C(0)
+        machine.RegisterBasedI2CDevice(0x40, bus, register_count=8)
+        bus.writeto(0x40, b"\x02\x12\x34\x56")
+        bus.writeto(0x40, b"\x03", stop=False)
+        self.assertEqual(bus.readfrom(0x40, 2), b"\x34\x56")
+        bus.writeto(0x40, b"\x02", stop=False)
+        destination = bytearray(2)
+        bus.readfrom_into(0x40, destination)
+        self.assertEqual(destination, b"\x12\x34")
+
     def test_spi_controller_transfer_and_bounded_observation(self):
         spi = machine.SPI(1, baudrate=2000000, polarity=1, phase=1)
         spi.read_buf = b"AB"

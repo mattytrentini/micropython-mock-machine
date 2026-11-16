@@ -5,7 +5,7 @@
     ["licenses/micropython-mock-machine.txt", "LICENSE"]
   ],
   "deps": [["logging", "0.6.2"]],
-  "version": "1.1.0",
+  "version": "1.1.1",
   "license": "MIT",
   "description": "Generic machine and network simulation for MicroPython Unix"
 }
