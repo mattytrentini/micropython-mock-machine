@@ -8,7 +8,7 @@ A test/model must explicitly supply an address and call set_link(True).
 
 import sys
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 STA_IF = 0
 AP_IF = 1

@@ -127,6 +127,54 @@ class MachineContract(unittest.TestCase):
         time.sleep_ms(1)
         self.assertEqual(events, [1, 1, 1])
 
+    def test_pin_observers_are_synchronous_preserved_and_reset(self):
+        pin = machine.Pin("control", value=1)
+        samples = []
+        edges = []
+        observer = lambda changed: samples.append((changed, changed.value()))
+        pin.add_observer(observer)
+        pin.add_observer(observer)
+        pin.irq(lambda changed: edges.append(changed.value()),
+                trigger=machine.Pin.IRQ_FALLING)
+        machine.Pin("control").init(mode=machine.Pin.OUT, value=0)
+        self.assertEqual(samples, [(pin, 0)])  # No event-loop yield required.
+        pin.value(0)
+        self.assertEqual(len(samples), 1)
+        time.sleep_ms(1)
+        self.assertEqual(edges, [0])
+        pin.inject(None)
+        self.assertEqual(samples[-1], (pin, None))
+        pin.inject(1)
+        self.assertEqual(samples[-1], (pin, 1))
+        time.sleep_ms(1)
+        self.assertEqual(edges, [0])  # Unknown transitions did not change IRQs.
+        pin.remove_observer(observer)
+        pin.remove_observer(observer)
+        pin.value(0)
+        self.assertEqual(len(samples), 3)
+        pin.add_observer(observer)
+        machine.reset_simulation()
+        self.assertEqual(pin._observers, [])
+        with self.assertRaises(OSError):
+            pin.add_observer(observer)
+        machine.Pin("control", value=1).value(0)
+        self.assertEqual(len(samples), 3)
+
+    def test_pin_observer_can_remove_itself(self):
+        pin = machine.Pin(1, value=0)
+        calls = []
+
+        def first(changed):
+            calls.append("first")
+            changed.remove_observer(first)
+
+        pin.add_observer(first)
+        pin.add_observer(lambda changed: calls.append("second"))
+        pin.value(1)
+        self.assertEqual(calls, ["first", "second"])
+        pin.value(0)
+        self.assertEqual(calls, ["first", "second", "second"])
+
     def test_alias_ambiguity_is_rejected(self):
         for aliases in ({"A": "B", "B": 1}, {"A": "A"}, {"A": []}):
             with self.assertRaises(ValueError):
@@ -198,6 +246,51 @@ class MachineContract(unittest.TestCase):
         spi.reset()
         with self.assertRaises(OSError):
             spi.read(1)
+
+    def test_spi_devices_receive_original_full_tx_and_preserve_lifecycle(self):
+        class Device:
+            def __init__(self):
+                self.last = None
+                self.calls = 0
+                self.offline = False
+
+            def write(self, buf):
+                if self.offline:
+                    raise OSError(errno.EIO)
+                self.last = buf
+                self.calls += 1
+
+        spi = machine.SPI("display")
+        first, second = Device(), Device()
+        spi.add_device(first)
+        spi.add_device(first)
+        spi.add_device(second)
+        payload = bytearray(4096)
+        spi.write(payload)
+        self.assertIs(first.last, payload)
+        self.assertIs(second.last, payload)
+        self.assertEqual(first.calls, 1)
+        self.assertEqual(len(spi.write_buf), 256)
+        machine.SPI("display", baudrate=40000000).init()
+        spi.write(payload)
+        self.assertEqual(first.calls, 2)
+        spi.deinit()
+        spi.init()
+        first.offline = True
+        with self.assertRaises(OSError) as raised:
+            spi.write(payload)
+        self.assertEqual(raised.exception.args[0], errno.EIO)
+        first.offline = False
+        spi.reset()
+        spi.write(payload)
+        self.assertEqual(first.calls, 2)
+        spi.add_device(first)
+        machine.reset_simulation()
+        self.assertEqual(spi.devices, [])
+        with self.assertRaises(OSError):
+            spi.write(payload)
+        machine.SPI("display").write(payload)
+        self.assertEqual(first.calls, 2)
 
     def test_uart_responder_repeated_exchanges_and_absent_response(self):
         uart = machine.UART(1, 19200, txbuf=8, rxbuf=8)

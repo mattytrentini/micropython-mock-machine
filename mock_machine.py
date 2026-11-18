@@ -7,7 +7,7 @@
 Mock machine module that can be used in unit tests to test drivers.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 import errno
 import io
@@ -675,6 +675,7 @@ class Pin:
             self._irq_handler = None
             self._irq_trigger = 0
             self._irq_generation = 0
+            self._observers = []
         self.init(mode=mode, pull=pull, alt=alt, value=value, drive=drive)
 
     def init(self, mode=_UNSET, pull=_UNSET, alt=_UNSET, value=_UNSET, drive=_UNSET):
@@ -710,6 +711,30 @@ class Pin:
             edge = self.IRQ_FALLING
         if edge & self._irq_trigger and self._irq_handler:
             micropython.schedule(self._dispatch_irq, (self._irq_handler, self._irq_generation))
+        if old != self._value:
+            # Synchronous electrical observers are independent of scheduled IRQs.
+            # Iterate the live list without allocating per edge; callbacks may
+            # remove themselves without skipping the next registered observer.
+            index = 0
+            while index < len(self._observers):
+                callback = self._observers[index]
+                callback(self)
+                if index < len(self._observers) and self._observers[index] == callback:
+                    index += 1
+
+    def add_observer(self, callback):
+        """Observe actual sample changes synchronously, including unknown levels."""
+        _check_active(self)
+        if not callable(callback):
+            raise TypeError("observer must be callable")
+        if callback not in self._observers:
+            self._observers.append(callback)
+
+    def remove_observer(self, callback):
+        """Remove an observer; removing an absent observer is harmless."""
+        _check_active(self)
+        if callback in self._observers:
+            self._observers.remove(callback)
 
     def _dispatch_irq(self, event):
         handler, generation = event
@@ -948,6 +973,14 @@ class SPI:
     def deinit(self):
         self._active = False
 
+    def add_device(self, device):
+        """Attach a synchronous TX consumer; the device handles its own selection."""
+        _check_active(self)
+        if not callable(getattr(device, "write", None)):
+            raise TypeError("SPI device must provide write(buf)")
+        if device not in self.devices:
+            self.devices.append(device)
+
     def read(self, nbytes, write=0x00):
         _check_active(self)
         if nbytes < 0:
@@ -980,6 +1013,8 @@ class SPI:
             self.writes.pop(0)
         self.writes.append(self.write_buf)
         self.num_writes += 1
+        for device in self.devices:
+            device.write(buf)
 
     def write_readinto(self, write_buf, read_buf):
         _check_active(self)
@@ -989,8 +1024,9 @@ class SPI:
         self.readinto(read_buf)
 
     def reset(self):
-        """Clear supplied receive data, bounded observations and counters."""
+        """Clear attached devices, RX fixtures, observations and counters."""
         _check_active(self)
+        self.devices = []
         self.write_buf = b""
         self.read_buf = b""
         self.writes = []
@@ -1397,9 +1433,12 @@ def reset_simulation():
         pin._active = False
         pin._irq_handler = None
         pin._irq_generation += 1
+        pin._observers.clear()
     Pin.pins.clear()
     Pin._aliases = {}
     Pin.board.configure(None)
+    for controller in SPI._controllers.values():
+        controller.devices.clear()
     for cls in (I2C, SPI, UART):
         for controller in cls._controllers.values():
             controller.deinit()

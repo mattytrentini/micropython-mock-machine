@@ -1,6 +1,6 @@
 # micropython-mock-machine
 
-A MicroPython library providing generic `machine` and modeled `network` state for driver tests and Unix simulation. Version 1.2.0, MIT licensed.
+A MicroPython library providing generic `machine` and modeled `network` state for driver tests and Unix simulation. Version 1.3.0, MIT licensed.
 
 This is a simulation foundation, not an ESP32 emulator or an N30/CO16 application bring-up. It supplies no board-specific chip, display-controller, meter or protocol models. Native MicroPython `asyncio`, `micropython.RingIO`, `framebuf`, time, GC and host networking remain native. Simulated results do not validate electrical behavior, timing, calibration or physical hardware.
 
@@ -17,12 +17,14 @@ Currently `mock_machine` implements:
 - **SPI** - Serial Peripheral Interface
   - `init`, `deinit`
   - `read`, `readinto`, `write`, `write_readinto`
+  - `add_device` for synchronous, device-selected TX consumers
 
 - **Pin** - Digital I/O pins
   - `init`, `value`, `on`, `off`, `high`, `low`
   - `irq` with IRQ_RISING and IRQ_FALLING triggers
   - `mode` configuration
   - `Pin.board` and `Pin.cpu` namespaces for pin name resolution
+  - `add_observer`, `remove_observer` for synchronous sampled-level observation
 
 - **ADC** - Analog to Digital Converter
   - `read_u16`
@@ -49,6 +51,23 @@ Additional utilities:
 - **freq** - Explicit virtual CPU frequency, initially unknown (`0`); no host CPU changes
 - **reset_simulation** - Session isolation for registries, aliases, frequency and owned timers
 
+### Version 1.3 synchronous SPI and Pin transport
+
+`SPI.add_device(device)` attaches a consumer with `write(buf)`. Every write
+dispatches the original full TX buffer synchronously without an unbounded copy;
+consumers must inspect their own CS/DC pins, ignore unselected transfers, and not
+retain or mutate the caller's buffer. Exceptions propagate to the real driver.
+There is no implicit SPI RX response: reads still require explicit RX fixtures.
+Lookup and `init()` preserve attachments; `reset()` detaches them, and
+`reset_simulation()` also clears old controllers' attachment lists.
+
+`Pin.add_observer(callback)` calls `callback(pin)` synchronously on actual sampled
+level changes (including changes to/from `None`), not on unchanged writes.
+Duplicate registration is harmless; `remove_observer(callback)` is idempotent.
+Lookup and `init()` preserve observers; simulation reset clears them and
+invalidates old pins. These callbacks do not replace or reschedule IRQs:
+matching known digital edges still use native `micropython.schedule`.
+
 ### Version 1.2 generic metadata and vectored I2C
 
 `I2C.writevto(addr, vector, stop=True)` delivers all buffer segments in one device
@@ -70,7 +89,7 @@ physical link-without-IP emulation.
 
 ```python
 import mip
-mip.install("github:mattytrentini/micropython-mock-machine", version="v1.2.0")
+mip.install("github:mattytrentini/micropython-mock-machine", version="v1.3.0")
 ```
 
 ### Manual installation
@@ -188,7 +207,7 @@ Pins model a sampled digital value, not electrical contention: pulls do not forc
 
 I2C/SPI/UART construction with the same controller ID (including the default `None`) returns shared state. Plain lookup never reconfigures, reactivates or erases state. Explicit options or `init()` reconfigure/re-enable; omitted settings remain unchanged. `deinit()` rejects subsequent I/O until explicit reinitialization. I2C retains its attached devices across deinit/init; missing addresses raise `OSError`.
 
-SPI supports byte-wide transfers. Supply `read_buf` for repeatable responses, or `reads` for a finite sequence consumed per call; absent/short responses raise `OSError` instead of fabricating bytes. `write_buf` retains the last transfer's final 256 bytes, `writes` retains at most 16 such captures, and `num_reads` / `num_writes` count transfers. These are bounded observations, not a full trace. `reset()` clears RX fixtures and observations without reconfiguring the controller.
+SPI supports byte-wide transfers. Supply `read_buf` for repeatable responses, or `reads` for a finite sequence consumed per call; absent/short responses raise `OSError` instead of fabricating bytes. `write_buf` retains the last transfer's final 256 bytes, `writes` retains at most 16 such captures, and `num_reads` / `num_writes` count transfers. These are bounded observations, not a full trace. `reset()` detaches consumers and clears RX fixtures and observations without reconfiguring the controller.
 
 ### UART peers and lifecycle
 
