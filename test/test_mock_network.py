@@ -123,6 +123,32 @@ class TestNetwork(unittest.TestCase):
             self.assertEqual(new.ifconfig(), ("0.0.0.0",) * 4)
             self.assertEqual(old.status(), network.STAT_IDLE)
 
+    def test_hostname_mac_metadata_and_reset(self):
+        self.assertEqual(network.hostname(), "")
+        network.hostname("test-simulator")
+        self.assertEqual(network.hostname(), "test-simulator")
+        self.assertEqual(network.ETH_CONNECTED, 3)
+        lan, wlan = network.LAN(), network.WLAN()
+        for interface in (lan, wlan):
+            self.assertEqual(interface.config("mac"), b"\x00" * 6)
+            interface.config(mac=bytearray(b"\x02\x01\x02\x03\x04\x05"))
+            self.assertEqual(interface.config("mac"), b"\x02\x01\x02\x03\x04\x05")
+            self.assertFalse(interface.active())
+            self.assertFalse(interface.isconnected())
+            for invalid in (b"short", "123456", None):
+                with self.assertRaises(ValueError):
+                    interface.config(mac=invalid)
+            self.assertEqual(interface.config("mac"), b"\x02\x01\x02\x03\x04\x05")
+        self.assertIs(network.LAN(), lan)
+        for invalid in (None, 123, "a" * 254, "bad\x00host"):
+            with self.assertRaises(ValueError):
+                network.hostname(invalid)
+        self.assertEqual(network.hostname(), "test-simulator")
+        network.reset_simulation()
+        self.assertEqual(network.hostname(), "")
+        for interface in (lan, wlan, network.LAN(), network.WLAN()):
+            self.assertEqual(interface.config("mac"), b"\x00" * 6)
+
     def test_registration_and_unsupported_operations(self):
         missing = object()
         previous = sys.modules.get("network", missing)

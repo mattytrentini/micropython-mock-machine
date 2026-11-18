@@ -7,7 +7,7 @@
 Mock machine module that can be used in unit tests to test drivers.
 """
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 import errno
 import io
@@ -234,6 +234,20 @@ class I2C:
         return self.devices[addr].writeto(buf, stop)
 
     # Memory operations
+    def writevto(self, addr, vector, stop=True):
+        """Write buffer vectors as one transaction, returning received ACKs.
+
+        Device callbacks see one contiguous payload, never separate transfers.
+        Empty buffers are ignored; stop and short ACK counts pass through.
+        """
+        _check_active(self)
+        if addr not in self.devices:
+            raise OSError(errno.ENODEV)
+        payload = bytearray()
+        for buf in vector:
+            payload.extend(memoryview(buf))
+        return self.devices[addr].writeto(payload, stop)
+
     def readfrom_mem(self, addr, memaddr, nbytes, *args, addrsize=8):  # pylint: disable=unused-argument
         """
         Read nbytes from the peripheral specified by addr, starting at memaddr.

@@ -8,7 +8,7 @@ A test/model must explicitly supply an address and call set_link(True).
 
 import sys
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 STA_IF = 0
 AP_IF = 1
@@ -21,10 +21,24 @@ STAT_NO_AP_FOUND = -2
 STAT_CONNECT_FAIL = -1
 STAT_HANDSHAKE_TIMEOUT = -4
 
+# MicroPython v1.29.0 ports/esp32/modnetwork.h Ethernet enum.
+# Existing generic STAT_* transition values remain unchanged.
+ETH_CONNECTED = 3
 _UNSET = object()
 _INTEGER = type(0)
 _DISCONNECTED = (STAT_IDLE, STAT_CONNECTING, STAT_WRONG_PASSWORD,
                  STAT_NO_AP_FOUND, STAT_CONNECT_FAIL, STAT_HANDSHAKE_TIMEOUT)
+_hostname = ""
+
+
+def hostname(name=_UNSET):
+    """Get/set explicit simulation metadata; never change host DNS/networking."""
+    global _hostname
+    if name is _UNSET:
+        return _hostname
+    if not isinstance(name, str) or len(name) > 253 or "\x00" in name:
+        raise ValueError("hostname requires a string of at most 253 characters")
+    _hostname = name
 
 
 def register_as_network():
@@ -56,6 +70,7 @@ class _Interface:
         self._ssid = None
         self._password = None
 
+        self._mac = b"\x00\x00\x00\x00\x00\x00"
     def active(self, value=_UNSET):
         if value is _UNSET:
             return self._active
@@ -117,6 +132,18 @@ class _Interface:
                 "connected": self._connected, "ifconfig": self._configuration,
                 "status": self._status}
 
+    def config(self, *args, **kwargs):
+        """Only explicit MAC metadata is modeled, not radio/PHY settings."""
+        if len(args) == 1 and args[0] == "mac" and not kwargs:
+            return self._mac
+        if not args and len(kwargs) == 1 and "mac" in kwargs:
+            value = kwargs["mac"]
+            if not isinstance(value, (bytes, bytearray, memoryview)) or len(value) != 6:
+                raise ValueError("mac requires six bytes")
+            self._mac = bytes(value)
+            return None
+        raise NotImplementedError("only MAC metadata configuration is modeled")
+
 
 class WLAN(_Interface):
     """Stable STA/AP identities. Only explicit models can complete association."""
@@ -153,8 +180,6 @@ class WLAN(_Interface):
     def scan(self):
         raise NotImplementedError("radio scanning is not modeled")
 
-    def config(self, *args, **kwargs):
-        raise NotImplementedError("radio configuration is not modeled")
 
 
 class LAN(_Interface):
@@ -189,12 +214,12 @@ class LAN(_Interface):
             if value is not _UNSET:
                 self._driver[key] = value
 
-    def config(self, *args, **kwargs):
-        raise NotImplementedError("PHY configuration is not modeled")
 
 
 def reset_simulation():
     """Deactivate existing handles and forget interface identities/configuration."""
+    global _hostname
+    _hostname = ""
     for registry in (WLAN._instances, LAN._instances):
         for interface in registry.values():
             interface._reset()

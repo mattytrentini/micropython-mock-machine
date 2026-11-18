@@ -17,6 +17,31 @@ class MachineContract(unittest.TestCase):
     def tearDown(self):
         machine.reset_simulation()
 
+    def test_i2c_writevto_is_one_transaction(self):
+        class Device:
+            addr = 0x3c
+
+            def __init__(self):
+                self.calls = []
+
+            def writeto(self, buf, stop=True):
+                self.calls.append((bytes(buf), stop))
+                return max(0, len(buf) - 1)
+
+        bus = machine.I2C("vector-test")
+        device = Device()
+        bus.add_device(device)
+        self.assertEqual(bus.writevto(0x3c, [b"\x40", b"", bytearray(b"ab"),
+                                          memoryview(b"cd")], False), 4)
+        self.assertEqual(device.calls, [(b"\x40abcd", False)])
+        self.assertEqual(bus.writevto(0x3c, []), 0)
+        self.assertEqual(device.calls[-1], (b"", True))
+        with self.assertRaises(OSError):
+            bus.writevto(0x3d, [b"x"])
+        bus.deinit()
+        with self.assertRaises(OSError):
+            bus.writevto(0x3c, [b"x"])
+
     def test_registration_uses_qualified_import(self):
         package = "machine_contract_import"
         previous = sys.modules.get("machine")

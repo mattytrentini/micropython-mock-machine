@@ -1,6 +1,6 @@
 # micropython-mock-machine
 
-A MicroPython library providing generic `machine` and modeled `network` state for driver tests and Unix simulation. Version 1.1.1, MIT licensed.
+A MicroPython library providing generic `machine` and modeled `network` state for driver tests and Unix simulation. Version 1.2.0, MIT licensed.
 
 This is a simulation foundation, not an ESP32 emulator or an N30/CO16 application bring-up. It supplies no board-specific chip, display-controller, meter or protocol models. Native MicroPython `asyncio`, `micropython.RingIO`, `framebuf`, time, GC and host networking remain native. Simulated results do not validate electrical behavior, timing, calibration or physical hardware.
 
@@ -10,7 +10,7 @@ Currently `mock_machine` implements:
 
 - **I2C** - Inter-Integrated Circuit bus with device simulation
   - `init`, `deinit`, `scan`
-  - `readfrom`, `readfrom_into`, `writeto`
+  - `readfrom`, `readfrom_into`, `writeto`, `writevto`
   - `readfrom_mem`, `readfrom_mem_into`, `writeto_mem`
   - `add_device` (for simulating multiple devices on the bus)
 
@@ -49,13 +49,28 @@ Additional utilities:
 - **freq** - Explicit virtual CPU frequency, initially unknown (`0`); no host CPU changes
 - **reset_simulation** - Session isolation for registries, aliases, frequency and owned timers
 
+### Version 1.2 generic metadata and vectored I2C
+
+`I2C.writevto(addr, vector, stop=True)` delivers all buffer segments in one device
+`writeto` call, preserves `stop`, and returns the device's ACK count. Missing or
+disabled controllers fail as for `writeto`; no OLED-specific behavior is added.
+
+`mock_network.hostname()` gets explicit metadata (initially `""`); passing a
+string sets it without changing the host. LAN/WLAN `config("mac")` gets six bytes
+(initially all zero, meaning unspecified); `config(mac=...)` sets explicit bytes,
+without changing host interfaces or connection state. Other configuration remains
+unsupported. `reset_simulation()` clears hostname and MAC metadata, including old
+interface handles. `ETH_CONNECTED=3` follows the ESP32 Ethernet enum, but existing
+generic `STAT_*` link-state semantics are preserved; this constant does not add
+physical link-without-IP emulation.
+
 ## Installation
 
 ### Using mip (recommended)
 
 ```python
 import mip
-mip.install("github:mattytrentini/micropython-mock-machine", version="v1.1.1")
+mip.install("github:mattytrentini/micropython-mock-machine", version="v1.2.0")
 ```
 
 ### Manual installation
